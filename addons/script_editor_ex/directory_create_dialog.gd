@@ -62,5 +62,11 @@ func _update_buttons():
 	self.get_ok_button().disabled = dir_path.text.length() < 1 or exists
 	
 func _on_confirmed():
-	var path = _base_path + "/" + dir_path.text
-	DirAccess.make_dir_recursive_absolute(path)
+	if _mode == 0:
+		# FILE
+		var path = _base_path + "/" + dir_path.text
+		DirAccess.make_dir_recursive_absolute(path)
+	else:
+		# DIR
+		var path = _base_path + "/" + dir_path.text
+		DirAccess.make_dir_recursive_absolute(path)

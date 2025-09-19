@@ -28,15 +28,6 @@ func _add_ui():
 	
 	_insert_ui(_panel)
 	
-	#_print_all_control(_get_editor_root().get_parent())
-	#var dock = _find_ui_by_all_control(_get_editor_root().get_parent().get_parent().get_parent().get_parent().get_parent().get_parent().get_parent(), "FileSystemDock")[0]
-	#print(str(dock))
-	#var dock_duplicate = dock.duplicate(true)
-	#print(str(dock_duplicate))
-	#var dock = _copy_ui(get_editor_interface().get_file_system_dock().get_children()[0])
-	#_print_all_control(dock)
-	#save_control_as_scene(dock, "res://addons/script_editor_ex/file_system_dock.tscn")
-	
 func _remove_ui():
 	if _panel:
 		var script_editor = get_editor_interface().get_script_editor()
@@ -78,55 +69,3 @@ func _reverse_ui(ui:Control):
 	ui.remove_child(target)
 	_get_editor_root().remove_child(ui)
 	_get_editor_root().add_child(target)
-	
-func _copy_ui(base:Control):
-	var copy = base.duplicate(true)
-	_apply_copy_all_control(base,copy)
-	return copy
-	
-func _apply_copy_all_control(target:Node,copy:Node):
-	if target:
-		for child in target.get_children():
-			var child_copy = child.duplicate(true)
-			copy.add_child(child_copy)
-			_apply_copy_all_control(child, child_copy)
-	
-func _find_ui_by_all_control(base:Control,find:String):
-	var ret = []
-	var f = func(_node:Node,h:int):
-		if _node.name == find:
-			ret.push_back(_node)
-	_apply_all_children(base,f,0)
-	return ret
-
-func _print_all_control(base:Control):
-	var _log = [""]
-	print(str(base.get_path()))
-	var f = func(_node:Node,h:int):
-		var head = ""
-		for i in range(h):
-			head += "- "
-		_log[0] += head + str(_node.name) + "\n"
-	_apply_all_children(base,f,0)
-	print(_log[0])
-
-func _apply_all_children(target:Node,f,h = 0):
-	if target:
-		f.call(target,h)
-		for child in target.get_children():
-			_apply_all_children(child, f, h+1)
-
-func save_control_as_scene(control: Control, path: String):
-	# PackedScene に変換
-	var packed_scene := PackedScene.new()
-	var result = packed_scene.pack(control)
-	if result != OK:
-		push_error("シーンのパックに失敗しました: %s" % result)
-		return
-
-	# 保存
-	var err = ResourceSaver.save(packed_scene, path)
-	if err != OK:
-		push_error("保存に失敗しました: %s" % err)
-	else:
-		print("保存成功: %s" % path)

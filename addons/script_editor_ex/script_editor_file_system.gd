@@ -12,7 +12,7 @@ var script_create_dialog:ScriptCreateDialog
 var folder_create_dialog:DirectoryCreateDialog
 var remove_dialog:RemoveDialog
 var duplicate_dialog:DuplicateDialog
-var rename_dialog:ConfirmationDialog
+var shortcut_infos:Array[Dictionary] = []
 
 static func create(_editor_plugin:EditorPlugin) -> ScriptEditorFileSystem:
 	var instance = ScriptEditorFileSystem.new()
@@ -21,6 +21,40 @@ static func create(_editor_plugin:EditorPlugin) -> ScriptEditorFileSystem:
 	return instance
 
 func _ready() -> void:
+	setup()
+
+func _enter_tree() -> void:
+	var fs = editor_plugin.get_editor_interface().get_resource_filesystem()
+	fs.filesystem_changed.connect(_on_filesystem_changed)
+	fs.resources_reimported.connect(_on_resources_reimported)
+	
+func _exit_tree() -> void:
+	var fs = editor_plugin.get_editor_interface().get_resource_filesystem()
+	fs.filesystem_changed.disconnect(_on_filesystem_changed)
+	fs.resources_reimported.disconnect(_on_resources_reimported)
+	
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey:
+		for info in shortcut_infos:
+			var shortcut:Shortcut = info.shortcut
+			if info.event != null and shortcut.matches_event(event):
+				info.event.call()
+				return
+		if event.pressed and !event.is_echo() and event.keycode == KEY_F12:
+			setup()
+	
+func _tree_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		if event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+			_on_mouse_right_pressed(event)
+		
+func clear():
+	for child in get_children():
+		child.queue_free()
+	shortcut_infos.clear()
+			
+func setup():
+	clear()
 	edit = LineEdit.new()
 	edit.placeholder_text = "Filter Files"
 	edit.right_icon = _get_icon("Search")
@@ -35,24 +69,9 @@ func _ready() -> void:
 	_update_edit()
 	_build_right_menu()
 	
-	# クリックでファイルを開くイベント
 	tree.multi_selected.connect(_on_item_selected)
-	# tree gui input
 	tree.gui_input.connect(_tree_gui_input)
-	
-	var fs = editor_plugin.get_editor_interface().get_resource_filesystem()
-	fs.filesystem_changed.connect(_on_filesystem_changed)
-	fs.resources_reimported.connect(_on_resources_reimported)
-	
-func _exit_tree() -> void:
-	var fs = editor_plugin.get_editor_interface().get_resource_filesystem()
-	fs.filesystem_changed.disconnect(_on_filesystem_changed)
-	fs.resources_reimported.disconnect(_on_resources_reimported)
-	
-func _tree_gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
-		if event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
-			_on_mouse_right_pressed(event)
+	tree.item_edited.connect(_on_item_edited)
 			
 func _build_right_menu():
 	# ref editor/docks/filesystem_dock.cpp
@@ -63,9 +82,9 @@ func _build_right_menu():
 	new_menu.id_pressed.connect(_open_menu)
 	right_menu.add_submenu_node_item("Create New", new_menu, 0)
 	right_menu.set_item_icon(right_menu.get_item_index(0), _get_icon("Add"))
-	right_menu.add_icon_shortcut(_get_icon("Rename"), _create_shortcut("Rename", KEY_F2, false), 10)
-	right_menu.add_icon_shortcut(_get_icon("Duplicate"), _create_shortcut("Duplicate", KEY_D, true), 12)
-	right_menu.add_icon_shortcut(_get_icon("Remove"), _create_shortcut("Delete", KEY_DELETE, false), 11)
+	right_menu.add_icon_shortcut(_get_icon("Rename"), _create_shortcut(_rename_file, "Rename", KEY_F2, false), 10)
+	right_menu.add_icon_shortcut(_get_icon("Duplicate"), _create_shortcut(_duplicate_file, "Duplicate", KEY_D, true), 12)
+	right_menu.add_icon_shortcut(_get_icon("Remove"), _create_shortcut(_remove_file, "Delete", KEY_DELETE, false), 11)
 	right_menu.id_pressed.connect(_open_menu)
 	right_menu.hide()
 	add_child(right_menu)
@@ -82,15 +101,11 @@ func _build_right_menu():
 	remove_dialog.confirmed.connect(_on_remove_file)
 	add_child(remove_dialog)
 	
-	rename_dialog = ConfirmationDialog.new()
-	rename_dialog.confirmed.connect(_on_rename_file)
-	add_child(rename_dialog)
-	
 	duplicate_dialog = DuplicateDialog.new()
 	duplicate_dialog.confirmed.connect(_on_duplicate_file)
 	add_child(duplicate_dialog)
 	
-func _create_shortcut(_name, keycode, ctrl:bool = false, shift:bool = false) -> Shortcut:
+func _create_shortcut(_event, _name, keycode, ctrl:bool = false, shift:bool = false) -> Shortcut:
 	var shortcut = Shortcut.new()
 	var key_event = InputEventKey.new()
 	key_event.keycode = keycode
@@ -99,6 +114,10 @@ func _create_shortcut(_name, keycode, ctrl:bool = false, shift:bool = false) -> 
 	key_event.command_or_control_autoremap = ctrl
 	shortcut.resource_name = _name
 	shortcut.events = [key_event]
+	shortcut_infos.push_back({
+		shortcut = shortcut,
+		event = _event
+	})
 	return shortcut
 	
 func _open_menu(id:int):
@@ -123,12 +142,16 @@ func _build_tree():
 	root.set_icon(0, _get_icon("Folder"))
 	root.set_text(0, "res://")
 	root.set_icon_modulate(0, Color("#88b6dd"))
-	root.set_metadata(0, "res://")
+	root.set_metadata(0, {
+			path = "res://",
+			is_dir = true
+		})
+	root.set_editable(0,false)
 	_populate_tree(tree, root, "res://")
 	
 func _populate_tree(tree:Tree, parent: TreeItem, path: String):
 	var dir := DirAccess.open(path)
-	if not dir:
+	if !dir:
 		return
 	dir.list_dir_begin()
 	var file_name = dir.get_next()
@@ -151,7 +174,11 @@ func _populate_tree(tree:Tree, parent: TreeItem, path: String):
 		var item = tree.create_item(parent,index)
 		item.collapsed = true
 		item.set_text(0, file_name)
-		item.set_metadata(0, full_path)
+		item.set_metadata(0, {
+			path = full_path,
+			is_dir = is_dir
+		})
+		item.set_editable(0,true)
 
 		if is_dir:
 			item.set_icon(0, _get_icon("Folder"))
@@ -159,8 +186,10 @@ func _populate_tree(tree:Tree, parent: TreeItem, path: String):
 			_populate_tree(tree, item, full_path) # 再帰でフォルダを展開
 			last_dir_index += 1
 		else:
-			if file_name.ends_with(".gd") or file_name.ends_with(".cfg"):
-				item.set_icon(0, _get_icon("Script"))
+			if file_name.ends_with(".gd"):
+				item.set_icon(0, _get_icon("GDScript"))
+			elif file_name.ends_with(".cfg"):
+				item.set_icon(0, _get_icon("File"))
 			else:
 				item.set_icon(0, _get_icon("File"))
 			item.set_icon_modulate(0, Color("#e0e0e0"))
@@ -212,7 +241,7 @@ func _on_item_selected(_item:TreeItem,_column:int,_seleted:bool):
 		return
 	var item := tree.get_selected()
 	if item:
-		var path: String = item.get_metadata(0)
+		var path: String = item.get_metadata(0).path
 		if path.ends_with(".gd")or path.ends_with(".cfg") or path.ends_with(".tscn") or path.ends_with(".tres"):
 			editor_plugin.get_editor_interface().edit_resource(load(path))
 			tree.grab_focus()
@@ -239,7 +268,7 @@ func _new_file():
 	print(str(item))
 	if item:
 		var dir:String = ""
-		dir = item.get_metadata(0)
+		dir = item.get_metadata(0).path
 		if item.get_icon(0) != _get_icon("Folder"):
 			dir = dir.get_base_dir()
 		var dialog = script_create_dialog
@@ -251,11 +280,11 @@ func _new_folder():
 	var item := tree.get_selected()
 	if item:
 		var dir:String = ""
-		dir = item.get_metadata(0)
+		dir = item.get_metadata(0).path
 		if item.get_icon(0) != _get_icon("Folder"):
 			dir = dir.get_base_dir()
 		var dialog = folder_create_dialog
-		dialog.config(dir, Callable(self,"_end_dialog"), 0, "Create Folder", "new folder")
+		dialog.config(dir, Callable(self,"_end_dialog"), 1, "Create Folder", "new folder")
 		dialog.popup_centered()
 	right_menu.hide()
 	
@@ -266,8 +295,9 @@ func _remove_file():
 		var remove_files:Array[String] = []
 		var remove_dirs:Array[String] = []
 		for _item in items:
-			var path:String = _item.get_metadata(0)
-			if path.get_file().contains("."):
+			var path:String = _item.get_metadata(0).path
+			var is_dir:bool = _item.get_metadata(0).is_dir
+			if !is_dir:
 				remove_files.push_back(path)
 			else:
 				remove_dirs.push_back(path)
@@ -279,16 +309,53 @@ func _remove_file():
 func _rename_file():
 	var item := tree.get_selected()
 	if item:
-		var dialog = rename_dialog
-		dialog.title = ""
-		dialog.popup_centered()
+		tree.edit_selected()
 	right_menu.hide()
+
+func _on_item_edited():
+	var item := tree.get_edited()
+	if item:
+		var file = item.get_text(0)
+		var param = item.get_metadata(0)
+		var is_error = file.is_empty()
+		var path:String = param.path
+		var prev_file = path.get_file()
+		var dir:String = ""
+		if !param.is_dir:
+			dir = path.get_base_dir()
+		else:
+			dir = path
+		var next:String = dir + "/" + file
+		print("%s -> %s" % [path,next])
+		is_error = is_error or DirAccess.rename_absolute(path, next) != OK
+		if is_error:
+			print("rename error")
+			item.set_text(0,prev_file)
+		else:
+			print("rename success")
+			param.path = next
+			item.set_metadata(0, param)
+			_on_rename_file()
 	
 func _duplicate_file():
 	var item := tree.get_selected()
 	if item:
+		var dir:String = ""
+		var mode:int = 0
+		var path:String = item.get_metadata(0).path
+		var is_dir:bool = item.get_metadata(0).is_dir
+		var file = path.get_file()
+		dir = item.get_metadata(0).path
+		if !is_dir:
+			dir = dir.get_base_dir()
+			mode = 0
+		else:
+			mode = 1
 		var dialog = duplicate_dialog
-		dialog.title = ""
+		if is_dir:
+			dialog.config(dir, Callable(self,"_end_dialog"), mode, tr("Duplicating folder:") + " " + file, file)
+		else:
+			dialog.config(dir, Callable(self,"_end_dialog"), mode, tr("Duplicating file:") + " " + file, file)
 		dialog.popup_centered()
 	right_menu.hide()
 	
@@ -318,10 +385,17 @@ func _on_resources_reimported(resources):
 	_build_tree()
 	_apply_filter()
 	
-func _get_seleted_items():
-	var ret = []
-	var item = tree.get_selected()
+func _get_seleted_items() -> Array[TreeItem]:
+	var result: Array[TreeItem] = []
+	var root: TreeItem = tree.get_root()
+	if root:
+		_collect_selected_recursive(root, result)
+	return result
+
+func _collect_selected_recursive(item: TreeItem, result: Array):
 	while item:
-		ret.push_back(item)
-		item = tree.get_next_selected(item)
-	return ret
+		if item.is_selected(0): # 0列目が選択されているか
+			result.append(item)
+		if item.get_first_child():
+			_collect_selected_recursive(item.get_first_child(), result)
+		item = item.get_next()
