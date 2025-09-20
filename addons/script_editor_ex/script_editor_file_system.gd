@@ -193,7 +193,7 @@ func _populate_tree(tree:Tree, parent: TreeItem, path: String):
 			path = full_path,
 			is_dir = is_dir
 		})
-		item.set_editable(0,true)
+		item.set_editable(0,ENABLE_DELETE)
 
 		if is_dir:
 			item.set_icon(0, _get_icon("Folder"))
