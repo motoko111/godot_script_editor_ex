@@ -2,7 +2,12 @@
 extends VBoxContainer
 class_name ScriptEditorFileSystem
 
-var REGEX_TARGET_FILE:RegEx = RegEx.create_from_string(".*\\.(gd|cfg)$") ## 表示対象のファイル正規表現
+## ファイル削除系は危ないので無効化
+const ENABLE_DELETE:bool = false 
+## Alt+F12でUI再構築
+const ENABLE_RELOAD:bool = true
+## 表示対象のファイル正規表現
+var REGEX_TARGET_FILE:RegEx = RegEx.create_from_string(".*\\.(gd|cfg)$") 
 
 var tree:Tree
 var edit:LineEdit
@@ -11,8 +16,10 @@ var right_menu:PopupMenu
 var script_create_dialog:ScriptCreateDialog
 var folder_create_dialog:DirectoryCreateDialog
 var remove_dialog:RemoveDialog
-var duplicate_dialog:DuplicateDialog
+var duplicate_dialog:DirectoryCreateDialog
 var shortcut_infos:Array[Dictionary] = []
+
+var _duplicate_src_path = ""
 
 static func create(_editor_plugin:EditorPlugin) -> ScriptEditorFileSystem:
 	var instance = ScriptEditorFileSystem.new()
@@ -40,7 +47,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if info.event != null and shortcut.matches_event(event):
 				info.event.call()
 				return
-		if event.pressed and !event.is_echo() and event.keycode == KEY_F12:
+		if ENABLE_RELOAD and event.pressed and !event.is_echo() and event.keycode == KEY_F12 and event.alt_pressed:
 			setup()
 	
 func _tree_gui_input(event: InputEvent) -> void:
@@ -52,6 +59,7 @@ func clear():
 	for child in get_children():
 		child.queue_free()
 	shortcut_infos.clear()
+	_duplicate_src_path = ""
 			
 func setup():
 	clear()
@@ -67,7 +75,6 @@ func setup():
 	add_child(edit)
 	add_child(tree)
 	_update_edit()
-	_build_right_menu()
 	
 	tree.multi_selected.connect(_on_item_selected)
 	tree.gui_input.connect(_tree_gui_input)
@@ -75,6 +82,8 @@ func setup():
 			
 func _build_right_menu():
 	# ref editor/docks/filesystem_dock.cpp
+	if right_menu:
+		right_menu.queue_free()
 	right_menu = PopupMenu.new()
 	var new_menu = PopupMenu.new()
 	new_menu.add_icon_item(_get_icon("Folder"), "Folder...", 1)
@@ -82,9 +91,11 @@ func _build_right_menu():
 	new_menu.id_pressed.connect(_open_menu)
 	right_menu.add_submenu_node_item("Create New", new_menu, 0)
 	right_menu.set_item_icon(right_menu.get_item_index(0), _get_icon("Add"))
-	right_menu.add_icon_shortcut(_get_icon("Rename"), _create_shortcut(_rename_file, "Rename", KEY_F2, false), 10)
-	right_menu.add_icon_shortcut(_get_icon("Duplicate"), _create_shortcut(_duplicate_file, "Duplicate", KEY_D, true), 12)
-	right_menu.add_icon_shortcut(_get_icon("Remove"), _create_shortcut(_remove_file, "Delete", KEY_DELETE, false), 11)
+	if ENABLE_DELETE:
+		right_menu.add_icon_shortcut(_get_icon("Rename"), _create_shortcut(_rename_file, "Rename", KEY_F2, false), 10)
+		right_menu.add_icon_shortcut(_get_icon("Duplicate"), _create_shortcut(_duplicate_file, "Duplicate", KEY_D, true), 12)
+		right_menu.add_icon_shortcut(_get_icon("Remove"), _create_shortcut(_remove_file, "Delete", KEY_DELETE, false), 11)
+	right_menu.add_icon_shortcut(_get_icon("Filesystem"), _create_shortcut(_open_file_manager, "Open in File Manager", KEY_R, true, false, true), 15)
 	right_menu.id_pressed.connect(_open_menu)
 	right_menu.hide()
 	add_child(right_menu)
@@ -97,19 +108,21 @@ func _build_right_menu():
 	folder_create_dialog.confirmed.connect(_on_create_folder)
 	add_child(folder_create_dialog)
 	
-	remove_dialog = RemoveDialog.new()
-	remove_dialog.confirmed.connect(_on_remove_file)
-	add_child(remove_dialog)
+	if ENABLE_DELETE:
+		remove_dialog = RemoveDialog.new()
+		remove_dialog.confirmed.connect(_on_remove_file)
+		add_child(remove_dialog)
+		
+		duplicate_dialog = DirectoryCreateDialog.new()
+		duplicate_dialog.confirmed.connect(_on_duplicate_file)
+		add_child(duplicate_dialog)
 	
-	duplicate_dialog = DuplicateDialog.new()
-	duplicate_dialog.confirmed.connect(_on_duplicate_file)
-	add_child(duplicate_dialog)
-	
-func _create_shortcut(_event, _name, keycode, ctrl:bool = false, shift:bool = false) -> Shortcut:
+func _create_shortcut(_event, _name, keycode, ctrl:bool = false, shift:bool = false, alt:bool = false) -> Shortcut:
 	var shortcut = Shortcut.new()
 	var key_event = InputEventKey.new()
 	key_event.keycode = keycode
 	key_event.ctrl_pressed = ctrl
+	key_event.alt_pressed = alt
 	key_event.shift_pressed = shift
 	key_event.command_or_control_autoremap = ctrl
 	shortcut.resource_name = _name
@@ -135,6 +148,8 @@ func _open_menu(id:int):
 			_remove_file()
 		12:
 			_duplicate_file()
+		15:
+			_open_file_manager()
 	
 func _build_tree():
 	tree.clear()
@@ -189,7 +204,7 @@ func _populate_tree(tree:Tree, parent: TreeItem, path: String):
 			if file_name.ends_with(".gd"):
 				item.set_icon(0, _get_icon("GDScript"))
 			elif file_name.ends_with(".cfg"):
-				item.set_icon(0, _get_icon("File"))
+				item.set_icon(0, _get_icon("TextFile"))
 			else:
 				item.set_icon(0, _get_icon("File"))
 			item.set_icon_modulate(0, Color("#e0e0e0"))
@@ -251,6 +266,7 @@ func _on_edit_text_changed(txt:String):
 	_update_edit()
 	
 func _on_mouse_right_pressed(ev:InputEventMouse):
+	_build_right_menu()
 	right_menu.position = ev.position + tree.get_screen_position()
 	right_menu.popup()
 	tree.grab_focus()
@@ -284,7 +300,7 @@ func _new_folder():
 		if item.get_icon(0) != _get_icon("Folder"):
 			dir = dir.get_base_dir()
 		var dialog = folder_create_dialog
-		dialog.config(dir, Callable(self,"_end_dialog"), 1, "Create Folder", "new folder")
+		dialog.config(dir, _on_confirm_new_folder, 1, "Create Folder", "new folder")
 		dialog.popup_centered()
 	right_menu.hide()
 	
@@ -321,13 +337,19 @@ func _on_item_edited():
 		var path:String = param.path
 		var prev_file = path.get_file()
 		var dir:String = ""
+		var next:String = ""
 		if !param.is_dir:
 			dir = path.get_base_dir()
+			next = dir + "/" + file
 		else:
 			dir = path
-		var next:String = dir + "/" + file
+			var index = path.rfind(prev_file)
+			var d = path.substr(0,index)
+			next = d + file
+		if next == path:
+			return
 		print("%s -> %s" % [path,next])
-		is_error = is_error or DirAccess.rename_absolute(path, next) != OK
+		is_error = is_error or !_rename(path, next, param.is_dir)
 		if is_error:
 			print("rename error")
 			item.set_text(0,prev_file)
@@ -336,6 +358,28 @@ func _on_item_edited():
 			param.path = next
 			item.set_metadata(0, param)
 			_on_rename_file()
+			
+func _rename(src:String,dest:String,is_dir:bool):
+	if src == dest:
+		return false
+	if is_dir:
+		if _copy_all_paths(src,dest):
+			if _remove_all_paths(src):
+				return true
+	else:
+		var is_error:bool = false
+		var success_cnt = 0
+		var path = src
+		var next = dest
+		var result = DirAccess.rename_absolute(path,next)
+		if result == OK:
+			print("[ScriptEditorFileSystem::_rename] rename:success. path: " + str(path) + " ->" +  str(next))
+			success_cnt += 1
+		else:
+			printerr("[ScriptEditorFileSystem::_rename] rename:error. path: " + str(path) + " ->" +  str(next))
+			is_error = true
+		return !is_error and success_cnt > 0
+	return false
 	
 func _duplicate_file():
 	var item := tree.get_selected()
@@ -344,20 +388,31 @@ func _duplicate_file():
 		var mode:int = 0
 		var path:String = item.get_metadata(0).path
 		var is_dir:bool = item.get_metadata(0).is_dir
-		var file = path.get_file()
-		dir = item.get_metadata(0).path
+		var file = item.get_text(0)
 		if !is_dir:
-			dir = dir.get_base_dir()
+			dir = path.get_base_dir()
 			mode = 0
 		else:
+			var index = path.rfind(file)
+			var d = path.substr(0,index)
+			dir = d
 			mode = 1
+		_duplicate_src_path = path
 		var dialog = duplicate_dialog
 		if is_dir:
-			dialog.config(dir, Callable(self,"_end_dialog"), mode, tr("Duplicating folder:") + " " + file, file)
+			dialog.config(dir, _on_confirm_duplicate, mode, tr("Duplicating folder:") + " " + file, file)
 		else:
-			dialog.config(dir, Callable(self,"_end_dialog"), mode, tr("Duplicating file:") + " " + file, file)
+			dialog.config(dir, _on_confirm_duplicate, mode, tr("Duplicating file:") + " " + file, file)
 		dialog.popup_centered()
 	right_menu.hide()
+	
+func _open_file_manager():
+	var item := tree.get_selected()
+	if item:
+		var path = item.get_metadata(0).path
+		var project_path = ProjectSettings.globalize_path(path)
+		print("open " + str(project_path))
+		OS.shell_show_in_file_manager(project_path)
 	
 func _on_create_script(script):
 	EditorInterface.get_resource_filesystem().scan()
@@ -374,8 +429,20 @@ func _on_rename_file():
 func _on_duplicate_file():
 	EditorInterface.get_resource_filesystem().scan()
 	
-func _end_dialog():
-	right_menu.hide()
+func _on_confirm_new_folder(path):
+	var result = DirAccess.make_dir_recursive_absolute(path)
+	if result == OK:
+		print("[ScriptEditorFileSystem::_on_confirm_new_folder] create folder:success. path: " + str(path))
+	else:
+		printerr("[ScriptEditorFileSystem::_on_confirm_new_folder] create folder:error. path: " + str(path) + " error:" + str(result))
+	
+func _on_confirm_duplicate(path):
+	var src = _duplicate_src_path
+	var dest = path
+	if _copy_all_paths(src, dest):
+		print("[ScriptEditorFileSystem::_on_confirm_duplicate] duplicate:success. path: " + str(src) + " ->" +  str(dest))
+	else:
+		printerr("[ScriptEditorFileSystem::_on_confirm_duplicate] duplicate:error. path: " + str(src) + " ->" +  str(dest))
 	
 func _on_filesystem_changed():
 	_build_tree()
@@ -385,6 +452,7 @@ func _on_resources_reimported(resources):
 	_build_tree()
 	_apply_filter()
 	
+## 再帰的に選択アイテム取得
 func _get_seleted_items() -> Array[TreeItem]:
 	var result: Array[TreeItem] = []
 	var root: TreeItem = tree.get_root()
@@ -392,6 +460,7 @@ func _get_seleted_items() -> Array[TreeItem]:
 		_collect_selected_recursive(root, result)
 	return result
 
+## 再帰的に選択アイテム取得
 func _collect_selected_recursive(item: TreeItem, result: Array):
 	while item:
 		if item.is_selected(0): # 0列目が選択されているか
@@ -399,3 +468,103 @@ func _collect_selected_recursive(item: TreeItem, result: Array):
 		if item.get_first_child():
 			_collect_selected_recursive(item.get_first_child(), result)
 		item = item.get_next()
+		
+# 再帰的に削除
+func _remove_all_paths(path:String) -> bool:
+	var dirs:Array[String] = []
+	var files:Array[String] = []
+	var is_dir = DirAccess.dir_exists_absolute(path)
+	if is_dir:
+		dirs.push_back(path)
+	else:
+		files.push_back(path)
+	_get_all_paths(path,dirs,files)
+	
+	var results = []
+	var is_error:bool = false
+	
+	# ファイルを先に削除
+	for file in files:
+		var result = DirAccess.remove_absolute(file)
+		if result == Error.OK:
+			results.push_back(file)
+			print("[ScriptEditorFileSystem::_remove_all_paths] delete:success. path: " + str(file))
+		else:
+			is_error = true
+			printerr("[ScriptEditorFileSystem::_remove_all_paths] delete:error. path: " + str(file) + " result:" + str(result))
+		
+	# 最下層から削除する
+	dirs.sort()
+	dirs.reverse()
+	for dir in dirs:
+		var result = DirAccess.remove_absolute(dir)
+		if result == Error.OK:
+			results.push_back(dir)
+			print("[ScriptEditorFileSystem::_remove_all_paths] delete:success. path: " + str(dir))
+		else:
+			is_error = true
+			printerr("[ScriptEditorFileSystem::_remove_all_paths] delete:error. path: " + str(dir) + " result:" + str(result))
+	
+	return !is_error and results.size() > 0
+			
+# 再帰的にコピー
+func _copy_all_paths(src:String,dest:String) -> bool:
+	var dirs:Array[String] = []
+	var files:Array[String] = []
+	var is_dir = DirAccess.dir_exists_absolute(src)
+	if is_dir:
+		dirs.push_back(src)
+	else:
+		files.push_back(src)
+	_get_all_paths(src,dirs,files)
+	
+	var results = []
+	var is_error:bool = false
+	
+	dirs.sort()
+	for dir in dirs:
+		var next = dir.replace(src,dest)
+		if DirAccess.dir_exists_absolute(next):
+			continue
+		var result = DirAccess.make_dir_recursive_absolute(next)
+		if result == OK:
+			print("[ScriptEditorFileSystem::_copy_all_paths] copy:success. path: " + str(dir) + " ->" +  str(next))
+			results.push_back(next)
+		else:
+			printerr("[ScriptEditorFileSystem::_copy_all_paths] copy:error. path: " + str(dir) + " ->" +  str(next) + " error:" + str(result))
+			is_error = true
+			
+	for file in files:
+		if file.ends_with(".uid"):
+			continue
+		var next = file.replace(src,dest)
+		if DirAccess.dir_exists_absolute(next):
+			continue
+		var result = DirAccess.copy_absolute(file,next)
+		if result == OK:
+			print("[ScriptEditorFileSystem::_copy_all_paths] copy:success. path: " + str(file) + " ->" +  str(next))
+			results.push_back(next)
+		else:
+			printerr("[ScriptEditorFileSystem::_copy_all_paths] copy:error. path: " + str(file) + " ->" +  str(next) + " error:" + str(result))
+			is_error = true
+		
+			
+	return !is_error and results.size() > 0
+
+## 再帰的にファイル/ディレクトリ取得
+func _get_all_paths(path:String,dirs:Array[String],files:Array[String]):
+	var dir := DirAccess.open(path)
+	if not dir:
+		return
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+	while file_name != "":
+		var full_path = path.path_join(file_name)
+		if dir.current_is_dir():
+			if !dirs.has(full_path):
+				dirs.push_back(full_path)
+			_get_all_paths(full_path,dirs,files)
+		else:
+			if !files.has(full_path):
+				files.push_back(full_path)
+		file_name = dir.get_next()

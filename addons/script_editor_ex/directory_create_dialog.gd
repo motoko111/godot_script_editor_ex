@@ -7,6 +7,7 @@ var base_path_label:Label
 var name_label:Label
 var _base_path:String = ""
 var _mode:int = 0
+var _confirmed
 
 func _ready() -> void:
 	min_size = Vector2i(480, 0)
@@ -41,8 +42,9 @@ func _ready() -> void:
 	self.visibility_changed.connect(_post_popup)
 	self.confirmed.connect(_on_confirmed)
 	
-func config(p_base_dir:String, p_accept_callback:Callable, p_mode:int, p_title:String, p_default_name:String):
+func config(p_base_dir:String, p_accept_callback, p_mode:int, p_title:String, p_default_name:String):
 	_mode = p_mode
+	_confirmed = p_accept_callback
 	_base_path = p_base_dir
 	base_path_label.text = tr("Base path: %s") % [_base_path]
 	dir_path.text = p_default_name
@@ -58,15 +60,14 @@ func _on_text_changed(txt:String):
 	_update_buttons()
 	
 func _update_buttons():
-	var exists = DirAccess.dir_exists_absolute(_base_path + "/" + dir_path.text)
-	self.get_ok_button().disabled = dir_path.text.length() < 1 or exists
+	if _mode == 0:
+		var exists = FileAccess.file_exists(_base_path + "/" + dir_path.text)
+		self.get_ok_button().disabled = dir_path.text.length() < 1 or exists
+	else:
+		var exists = DirAccess.dir_exists_absolute(_base_path + "/" + dir_path.text)
+		self.get_ok_button().disabled = dir_path.text.length() < 1 or exists
 	
 func _on_confirmed():
-	if _mode == 0:
-		# FILE
-		var path = _base_path + "/" + dir_path.text
-		DirAccess.make_dir_recursive_absolute(path)
-	else:
-		# DIR
-		var path = _base_path + "/" + dir_path.text
-		DirAccess.make_dir_recursive_absolute(path)
+	var path = _base_path + "/" + dir_path.text
+	if _confirmed:
+		_confirmed.call(path)

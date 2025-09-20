@@ -33,7 +33,6 @@ func _remove_ui():
 		var script_editor = get_editor_interface().get_script_editor()
 		if script_editor and script_editor.get_current_editor():
 			_reverse_ui(_panel)
-			
 
 func _is_open_script_editor() -> bool:
 	if !get_editor_interface():

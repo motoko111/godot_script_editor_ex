@@ -1,2 +1,0 @@
-extends DirectoryCreateDialog
-class_name DuplicateDialog
